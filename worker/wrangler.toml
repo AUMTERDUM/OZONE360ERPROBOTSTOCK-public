@@ -1,0 +1,75 @@
+name = "ozone360-erp-api"
+main = "src/index.ts"
+compatibility_date = "2025-01-01"
+compatibility_flags = ["nodejs_compat"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "ozone360-erp-dev"
+database_id = "YOUR_D1_DATABASE_ID"
+migrations_dir = "drizzle"
+
+[vars]
+ALLOWED_ORIGINS = "http://localhost:5173,http://localhost:8081,https://erp.example.com,https://your-project.pages.dev"
+GOOGLE_CLIENT_ID = "YOUR_GOOGLE_CLIENT_ID.apps.googleusercontent.com"
+OZONE_DOMAIN = "@example.com"
+
+# JWT_SECRET, PUDUAPIKEY, PUDUAPIsecret are secrets, not vars — set with:
+#   npx wrangler secret put JWT_SECRET
+#   npx wrangler secret put PUDUAPIKEY
+#   npx wrangler secret put PUDUAPIsecret
+# Password verification emails use Resend. Configure before deploying:
+#   npx wrangler secret put RESEND_API_KEY
+#   npx wrangler secret put EMAIL_FROM
+# and for local dev, put them in worker/.dev.vars (see .dev.vars.example)
+
+[[r2_buckets]]
+binding = "UPLOADS"
+bucket_name = "ozone360-erp-uploads"
+
+# Cloudflare's native Rate Limiting binding only supports 10s/60s windows, so the
+# longer Express windows (login: 10/15min, public-report: 5/5min) are approximated
+# on a 60s window — see src/middleware/rate-limit.ts for details. The per-account
+# lockout in routes/auth.ts remains the primary brute-force defense for login.
+[[ratelimits]]
+name = "LOGIN_LIMITER"
+namespace_id = "1001"
+  [ratelimits.simple]
+  limit = 10
+  period = 60
+
+[[ratelimits]]
+name = "UPLOAD_LIMITER"
+namespace_id = "1002"
+  [ratelimits.simple]
+  limit = 20
+  period = 60
+
+[[ratelimits]]
+name = "API_LIMITER"
+namespace_id = "1003"
+  [ratelimits.simple]
+  limit = 300
+  period = 60
+
+[[ratelimits]]
+name = "PORTAL_LIMITER"
+namespace_id = "1004"
+  [ratelimits.simple]
+  limit = 30
+  period = 60
+
+[[ratelimits]]
+name = "PUBLIC_REPORT_LIMITER"
+namespace_id = "1005"
+  [ratelimits.simple]
+  limit = 2
+  period = 60
+
+# Cron Triggers — see src/index.ts's CRON_JOBS dispatch table.
+#   00:00 daily  — logical JSON backup to R2 (D1 Time Travel covers point-in-time recovery)
+#   08:00 daily  — overdue robot-loan notifications
+#   hourly       — SLA breach/escalation + due-maintenance-schedule generation
+#   every 6h     — Pudu auto-sync (replaces the original's setInterval)
+[triggers]
+crons = ["0 0 * * *", "0 8 * * *", "0 * * * *", "0 */6 * * *"]

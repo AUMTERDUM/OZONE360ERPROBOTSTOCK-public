@@ -1,0 +1,653 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+model User {
+  id                String    @id @default(uuid())
+  username          String    @unique
+  password          String
+  role              String    @default("ADMIN") // ADMIN only
+  googleEmail       String?   @unique                // Google account email (optional)
+  failedAttempts    Int       @default(0)
+  lockedUntil       DateTime?
+  passwordChangedAt DateTime?
+}
+
+model RobotModel {
+  id              String  @id @default(uuid())
+  name            String
+  type            String
+  payloadCapacity String
+  batteryLife     String
+  imageUrl        String?
+  puduProductCode String? @unique // Pudu API product_code e.g. "BellaBot"
+  robots          Robot[]
+}
+
+model Customer {
+  id            String  @id @default(uuid())
+  name          String
+  contactPerson String
+  email         String
+  phone         String
+  address       String
+  logoUrl       String?
+  type          String  @default("customer") // "customer" | "agent"
+  agentCode     String? // e.g. TH0027
+  puduShopId    String? @unique // Pudu API shop_id
+  puduCompanyId String?          // Pudu API company_id
+  portalToken   String? @unique  // token for customer self-service portal
+  robots        Robot[]
+  tickets       MaintenanceTicket[]
+  maintenanceSchedules MaintenanceSchedule[]
+  maintenancePlans MaintenancePlan[]
+  deliveryNotes DeliveryNote[]
+  robotLoans    RobotLoan[]
+  contacts      Contact[]
+  sites         Site[]
+}
+
+model Warehouse {
+  id       String      @id @default(uuid())
+  name     String
+  notes    String?
+  parentId String?
+  parent   Warehouse?  @relation("WarehouseHierarchy", fields: [parentId], references: [id])
+  children Warehouse[] @relation("WarehouseHierarchy")
+  robots   Robot[]
+  spareParts SparePart[]
+}
+
+model Robot {
+  id                String  @id @default(uuid())
+  serialNumber      String  @unique
+  status            String  // In Stock, Assigned, In Maintenance
+  purchaseDate      String
+  puduMac           String? // Pudu API mac address
+  notes             String?
+  warrantyExpiresAt String?
+  archivedAt        String?
+
+  modelId           String
+  model             RobotModel @relation(fields: [modelId], references: [id])
+
+  customerId        String?
+  customer          Customer?  @relation(fields: [customerId], references: [id])
+
+  locationId        String?
+  location          Warehouse? @relation(fields: [locationId], references: [id])
+
+  tickets           MaintenanceTicket[]
+  maintenanceSchedules MaintenanceSchedule[]
+  maintenancePlans  MaintenancePlanRobot[]
+
+  @@index([customerId])
+  @@index([modelId])
+  @@index([locationId])
+  @@index([status])
+}
+
+model MaintenanceTicket {
+  id               String  @id @default(uuid())
+  trackingToken    String? @unique
+  issueDescription String
+  status           String  // Pending, In Progress, Waiting Quotation, Ready to Ship, Completed
+  reportDate       String
+  resolution       String?
+  replacedParts    String?
+  issueImageUrl    String?
+  assignedTo       String? // username of assigned technician
+  priorityLevel    String  @default("Normal") // Low, Normal, High, Critical
+
+  // SLA fields
+  slaHours         Int?     // target resolution hours based on priority
+  slaDueAt         String?  // ISO datetime when SLA expires
+  slaBreachedAt    String?  // when SLA was first breached
+  escalationLevel  Int      @default(0) // 0=none, 1=warning, 2=escalated to admin
+  
+  robotId          String
+  robot            Robot     @relation(fields: [robotId], references: [id])
+
+  scheduleId       String?
+  schedule         MaintenanceSchedule? @relation(fields: [scheduleId], references: [id])
+  
+  customerId       String?
+  customer         Customer? @relation(fields: [customerId], references: [id])
+
+  usedParts        UsedPart[]
+
+  @@index([robotId])
+  @@index([customerId])
+  @@index([scheduleId])
+  @@index([status])
+  @@index([assignedTo])
+  @@index([reportDate])
+}
+
+model MaintenanceSchedule {
+  id               String   @id @default(uuid())
+  title            String
+  robotId          String
+  robot            Robot     @relation(fields: [robotId], references: [id])
+  customerId       String?
+  customer         Customer? @relation(fields: [customerId], references: [id])
+  frequencyDays    Int
+  leadDays         Int      @default(7)
+  nextDueDate      String
+  lastGeneratedAt  String?
+  lastCompletedAt  String?
+  assignedTo       String?
+  priorityLevel    String   @default("Normal")
+  notes            String?
+  active           Boolean  @default(true)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  tickets          MaintenanceTicket[]
+}
+
+// One survey visit at a customer site, either the AMR (delivery robot) or the cleaning-robot
+// questionnaire. `answers` holds every field of that questionnaire as JSON.
+model SiteSurvey {
+  id            String   @id @default(uuid())
+  formType      String   // 'amr' | 'cleaning'
+  siteName      String
+  surveyDate    String?
+  engineerName  String?
+  zone          String?
+  answers       String   @default("{}")
+  createdBy     String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+model MaintenancePlan {
+  id              String   @id @default(uuid())
+  customerId      String
+  customer        Customer @relation(fields: [customerId], references: [id])
+  startDate       String   // YYYY-MM-DD - contract / store start date
+  endDate         String?  // YYYY-MM-DD - MA expiry; null = open-ended
+  intervalMonths  Int      @default(3)
+  notes           String?
+  active          Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  visits          MaintenanceVisit[]
+  robots          MaintenancePlanRobot[]
+}
+
+// Robots covered by a plan. No rows = the plan covers all of the customer's robots.
+model MaintenancePlanRobot {
+  planId  String
+  plan    MaintenancePlan @relation(fields: [planId], references: [id], onDelete: Cascade)
+  robotId String
+  robot   Robot           @relation(fields: [robotId], references: [id], onDelete: Cascade)
+
+  @@id([planId, robotId])
+  @@index([robotId])
+}
+
+model MaintenanceVisit {
+  id              String          @id @default(uuid())
+  planId          String
+  plan            MaintenancePlan @relation(fields: [planId], references: [id], onDelete: Cascade)
+  visitNumber     Int             // 1, 2, 3, ...
+  scheduledDate   String          // YYYY-MM-DD
+  status          String          @default("Scheduled") // Scheduled, Done, Skipped
+  completedAt     String?
+  technician      String?
+  summary         String?
+  reportJson      String?         // JSON: [{ serialNumber, condition, notes }]
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  @@index([planId])
+  @@index([scheduledDate])
+  @@index([status])
+}
+
+model UsedPart {
+  id          String            @id @default(uuid())
+  ticketId    String
+  ticket      MaintenanceTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  sparePartId String
+  sparePart   SparePart         @relation(fields: [sparePartId], references: [id])
+  quantity    Int
+  note        String?
+
+  @@index([ticketId])
+  @@index([sparePartId])
+}
+
+model ActivityLog {
+  id          String   @id @default(uuid())
+  entityType  String   // "Robot", "Customer", "RobotModel", "MaintenanceTicket", "Warehouse"
+  entityId    String
+  entityName  String?
+  action      String   // "created", "updated", "deleted", "status_changed", "synced", "attachment_added"
+  oldValues   String?  // JSON string
+  newValues   String?  // JSON string
+  performedBy String?
+  performedAt DateTime @default(now())
+
+  @@index([entityType, entityId])
+  @@index([performedAt])
+}
+
+model Attachment {
+  id             String   @id @default(uuid())
+  elementType    String   // "Robot", "Customer", "MaintenanceTicket", "RobotModel"
+  elementId      String
+  attachmentType String   @default("other") // "photo", "manual", "log", "warranty", "other"
+  filename       String
+  originalName   String
+  fileSize       Int?
+  mimeType       String?
+  uploadedBy     String?
+  uploadedAt     DateTime @default(now())
+
+  @@index([elementType, elementId])
+}
+
+model RobotLoan {
+  id              String          @id @default(uuid())
+  docNumber       String          @unique
+  purpose         String          // วัตถุประสงค์การยืม
+  loanDate        String          // วันที่ยืม
+  expectedReturn  String          // กำหนดคืน
+  actualReturn    String?         // วันที่คืนจริง
+  status          String          @default("Pending") // Pending, Approved, Active, Returned, Cancelled
+  borrowerName    String
+  borrowerPhone   String?
+  borrowerDept    String?
+  customerId      String?
+  customer        Customer?       @relation(fields: [customerId], references: [id])
+  approvedBy      String?
+  approvedAt      String?
+  notes           String?
+  createdAt       DateTime        @default(now())
+  createdBy       String?
+  items           RobotLoanItem[]
+}
+
+model RobotLoanItem {
+  id          String    @id @default(uuid())
+  loanId      String
+  loan        RobotLoan @relation(fields: [loanId], references: [id], onDelete: Cascade)
+  robotId     String
+  serialNumber String   // snapshot at loan time
+  modelName   String   // snapshot at loan time
+  remark      String?
+  returnedAt  String?
+  condition   String?  // condition on return
+}
+
+model DeliveryNote {
+  id            String             @id @default(uuid())
+  docNumber     String             @unique
+  deliveryDate  String
+  customerId    String
+  customer      Customer           @relation(fields: [customerId], references: [id])
+  status        String             @default("Pending") // Pending, Packed, In Transit, Delivered, Accepted, Invoiced
+  recipientName String?
+  recipientDate String?
+  senderName    String?
+  notes         String?
+  installedAt   String?            // when robots were installed on-site
+  acceptedAt    String?            // customer acceptance date
+  trackingNumber String?           // shipping/logistics tracking
+  createdAt     DateTime           @default(now())
+  createdBy     String?
+  items         DeliveryNoteItem[]
+
+  @@index([customerId])
+  @@index([status])
+  @@index([deliveryDate])
+}
+
+model DeliveryNoteItem {
+  id             String       @id @default(uuid())
+  deliveryNoteId String
+  deliveryNote   DeliveryNote @relation(fields: [deliveryNoteId], references: [id], onDelete: Cascade)
+  description    String
+  quantity       Int
+  remark         String?
+  serialNumbers  String       // JSON array of serial numbers
+  sparePartId    String?      // linked spare part for stock tracking
+}
+
+model SparePart {
+  id          String  @id @default(uuid())
+  sku         String  @unique
+  name        String
+  description String?
+  category    String? // Model/robot type this part is for
+  productModel String?
+  partType    String?
+  location    String?
+  warehouseId String?
+  warehouse   Warehouse? @relation(fields: [warehouseId], references: [id])
+  stock       Int     @default(0)
+  minStock    Int     @default(0)
+  unitPrice   Float   @default(0)
+  supplier    String?
+  status      String?
+  sourceFile  String?
+  sourceSheet String?
+  items       SparePartItem[]
+  usedIn      UsedPart[]
+}
+
+model SparePartItem {
+  id           String    @id @default(uuid())
+  sparePartId  String
+  sparePart    SparePart @relation(fields: [sparePartId], references: [id], onDelete: Cascade)
+  serialNumber String
+  receivedDate String
+  createdAt    DateTime  @default(now())
+
+  @@unique([sparePartId, serialNumber])
+  @@index([sparePartId])
+  @@index([receivedDate])
+}
+
+// ── Recycle Bin ───────────────────────────────────────────────────────────────
+model TrashItem {
+  id          String   @id @default(uuid())
+  entityType  String   // "Robot", "Customer", "RobotModel", "SparePart", "DeliveryNote", "Warehouse"
+  entityId    String
+  entityName  String?
+  entityData  String   // full JSON snapshot of deleted item (+ nested items for DN)
+  deletedBy   String?
+  deletedAt   DateTime @default(now())
+
+  @@index([entityType])
+  @@index([deletedAt])
+}
+
+// ── Purchase Orders (ใบสั่งซื้ออะไหล่) ───────────────────────────────────────
+model PurchaseOrder {
+  id          String              @id @default(uuid())
+  docNumber   String              @unique
+  orderDate   String
+  supplier    String
+  supplierContact String?
+  supplierPhone   String?
+  supplierChannel String?
+  status      String              @default("Draft") // Draft, Ordered, Partial, Received, Cancelled
+  notes       String?
+  totalAmount Float               @default(0)
+  expectedDeliveryDate String?
+  paymentTerms String?            // e.g. "Net 30", "COD"
+  createdAt   DateTime            @default(now())
+  createdBy   String?
+  approvedBy  String?
+  approvedAt  String?
+  receivedAt  String?
+  items       PurchaseOrderItem[]
+}
+
+model PurchaseOrderItem {
+  id              String        @id @default(uuid())
+  purchaseOrderId String
+  purchaseOrder   PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  sparePartId     String?
+  sku             String        // snapshot
+  partName        String        // snapshot
+  quantity        Int
+  unitPrice       Float
+  receivedQty     Int           @default(0)
+  remark          String?
+}
+
+// ── In-App Notifications ──────────────────────────────────────────────────────
+model Notification {
+  id         String   @id @default(uuid())
+  type       String   // low_stock, overdue_loan, ticket_updated, system
+  title      String
+  body       String?
+  read       Boolean  @default(false)
+  entityType String?
+  entityId   String?
+  createdAt  DateTime @default(now())
+
+  @@index([read, createdAt])
+  @@index([entityType, entityId])
+}
+
+// ── Project Requests (ใบเปิดโปรเจค) ─────────────────────────────────────────
+model ProjectRequest {
+  id               String               @id @default(uuid())
+  docNumber        String               @unique
+  title            String               // ชื่อโปรเจค
+  description      String?              // รายละเอียด/ขอบเขตงาน
+  projectType      String               @default("Both") // ExternalParts | ExternalLabor | Both
+  status           String               @default("Draft") // Draft | Pending | Approved | InProgress | Completed | Cancelled
+  startDate        String
+  expectedEndDate  String?
+  actualEndDate    String?
+  budget           Float                @default(0)
+  totalCost        Float                @default(0)
+  customerId       String?
+  robotId          String?
+  notes            String?
+  createdAt        DateTime             @default(now())
+  createdBy        String?
+  approvedBy       String?
+  approvedAt       String?
+  items            ProjectRequestItem[]
+}
+
+model ProjectRequestItem {
+  id               String         @id @default(uuid())
+  projectRequestId String
+  projectRequest   ProjectRequest @relation(fields: [projectRequestId], references: [id], onDelete: Cascade)
+  itemType         String         // Part | Labor | Other
+  description      String
+  vendor           String?        // ผู้จำหน่าย / ช่างนอก
+  quantity         Float          @default(1)
+  unit             String         @default("ชิ้น") // ชิ้น, ชม., งาน, เซ็ต,...
+  unitPrice        Float          @default(0)
+  totalPrice       Float          @default(0)
+  link             String?        // ลิ้งค์สินค้า / เว็บผู้จำหน่าย
+  remark           String?
+}
+
+// ── Accounts Module (การเงิน) ─────────────────────────────────────────────────
+
+// Chart of Accounts
+model Account {
+  id           String             @id @default(uuid())
+  code         String             @unique // e.g. "1100", "2100"
+  name         String
+  type         String             // Asset, Liability, Income, Expense, Equity
+  parentId     String?
+  parent       Account?           @relation("AccountHierarchy", fields: [parentId], references: [id])
+  children     Account[]          @relation("AccountHierarchy")
+  isActive     Boolean            @default(true)
+  createdAt    DateTime           @default(now())
+  journalLines JournalEntryLine[]
+  budgets      Budget[]
+}
+
+// Sales & Purchase Invoices
+model Invoice {
+  id           String        @id @default(uuid())
+  docNumber    String        @unique
+  invoiceType  String        // Sales | Purchase
+  status       String        @default("Draft") // Draft, Issued, Paid, Partial, Cancelled, Overdue
+  invoiceDate  String
+  dueDate      String
+  customerId   String?       // for Sales invoice
+  customerName String?
+  supplier     String?       // for Purchase invoice
+  subtotal     Float         @default(0)
+  taxRate      Float         @default(7) // VAT %
+  taxAmount    Float         @default(0)
+  totalAmount  Float         @default(0)
+  paidAmount   Float         @default(0)
+  notes        String?
+  sourceType   String?       // DeliveryNote, PurchaseOrder, ProjectRequest, MaintenanceTicket
+  sourceId     String?
+  createdAt    DateTime      @default(now())
+  createdBy    String?
+  items        InvoiceItem[]
+  payments     Payment[]
+}
+
+model InvoiceItem {
+  id          String  @id @default(uuid())
+  invoiceId   String
+  invoice     Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  description String
+  quantity    Float
+  unit        String  @default("ชิ้น")
+  unitPrice   Float
+  amount      Float   // quantity * unitPrice
+  remark      String?
+}
+
+// Payments
+model Payment {
+  id          String   @id @default(uuid())
+  docNumber   String   @unique
+  paymentType String   // Receive | Pay
+  paymentDate String
+  amount      Float
+  method      String   @default("Transfer") // Cash, Transfer, Cheque, Credit
+  reference   String?  // bank ref / cheque number
+  invoiceId   String?
+  invoice     Invoice? @relation(fields: [invoiceId], references: [id])
+  notes       String?
+  createdAt   DateTime @default(now())
+  createdBy   String?
+}
+
+// ── Contact / Site structure ──────────────────────────────────────────────────
+model Contact {
+  id         String   @id @default(uuid())
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  name       String
+  role       String?  // e.g. "IT Manager", "Operations"
+  email      String?
+  phone      String?
+  lineId     String?
+  isPrimary  Boolean  @default(false)
+  createdAt  DateTime @default(now())
+}
+
+model Site {
+  id         String   @id @default(uuid())
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  name       String   // e.g. "สาขาสยาม", "สำนักงานใหญ่"
+  address    String?
+  province   String?
+  lat        Float?
+  lng        Float?
+  notes      String?
+  createdAt  DateTime @default(now())
+}
+
+// ── Material Request (auto-reorder) ──────────────────────────────────────────
+model MaterialRequest {
+  id          String               @id @default(uuid())
+  docNumber   String               @unique
+  status      String               @default("Pending") // Pending, Approved, Ordered, Cancelled
+  requestDate String
+  notes       String?
+  createdBy   String?
+  approvedBy  String?
+  approvedAt  String?
+  linkedPoId  String?              // PO created from this MR
+  createdAt   DateTime             @default(now())
+  items       MaterialRequestItem[]
+}
+
+model MaterialRequestItem {
+  id                String          @id @default(uuid())
+  materialRequestId String
+  materialRequest   MaterialRequest @relation(fields: [materialRequestId], references: [id], onDelete: Cascade)
+  sparePartId       String
+  partName          String
+  sku               String
+  currentStock      Int
+  minStock          Int
+  requestedQty      Int
+  remark            String?
+}
+
+// Journal Entries (General Ledger)
+model JournalEntry {
+  id          String             @id @default(uuid())
+  docNumber   String             @unique
+  entryDate   String
+  description String?
+  sourceType  String?  // Invoice, Payment, Manual
+  sourceId    String?
+  createdAt   DateTime           @default(now())
+  createdBy   String?
+  lines       JournalEntryLine[]
+}
+
+model JournalEntryLine {
+  id             String       @id @default(uuid())
+  journalEntryId String
+  journalEntry   JournalEntry @relation(fields: [journalEntryId], references: [id], onDelete: Cascade)
+  accountId      String
+  account        Account      @relation(fields: [accountId], references: [id])
+  debit          Float        @default(0)
+  credit         Float        @default(0)
+  description    String?
+}
+
+// Budgets
+model Budget {
+  id           String   @id @default(uuid())
+  name         String
+  accountId    String
+  account      Account  @relation(fields: [accountId], references: [id])
+  fiscalYear   String   // e.g. "2026"
+  budgetAmount Float
+  spentAmount  Float    @default(0)
+  notes        String?
+  createdAt    DateTime @default(now())
+}
+
+// ── ใบเบิกค่าออกต่างจังหวัด (Out-of-Province Expense Claims) ─────────────────
+model TravelExpenseClaim {
+  id              String               @id @default(uuid())
+  docNumber       String               @unique
+  claimDate       String
+  province        String
+  destination     String?
+  purpose         String
+  staffName       String
+  staffDept       String?
+  travelDateFrom  String
+  travelDateTo    String
+  status          String               @default("Draft") // Draft, Submitted, Approved, Paid, Cancelled
+  totalAdvance    Float                @default(0) // รายการที่สำรองจ่าย
+  totalReimbursed Float                @default(0) // รายการที่เบิกจ่ายไปแล้ว
+  notes           String?
+  createdAt       DateTime             @default(now())
+  createdBy       String?
+  approvedBy      String?
+  approvedAt      String?
+  items           TravelExpenseItem[]
+}
+
+model TravelExpenseItem {
+  id          String              @id @default(uuid())
+  claimId     String
+  claim       TravelExpenseClaim  @relation(fields: [claimId], references: [id], onDelete: Cascade)
+  itemType    String              // "advance" | "reimbursed"
+  description String
+  amount      Float
+  receiptNo   String?
+  remark      String?
+}

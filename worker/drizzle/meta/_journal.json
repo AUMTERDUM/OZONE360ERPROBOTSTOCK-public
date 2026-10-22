@@ -1,0 +1,41 @@
+{
+  "version": "7",
+  "dialect": "sqlite",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "6",
+      "when": 1783417670042,
+      "tag": "0000_absurd_zuras",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1784023200000,
+      "tag": "0001_spare_parts_catalog",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1785222600000,
+      "tag": "0002_robot_model_sku",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1786800000000,
+      "tag": "0003_spare_part_item_warehouse",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1787400000000,
+      "tag": "0004_spare_part_item_notes",
+      "breakpoints": true
+    }
+  ]
+}

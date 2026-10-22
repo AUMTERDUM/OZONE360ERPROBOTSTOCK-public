@@ -1,0 +1,10 @@
+node_modules
+# Keep environment variables out of version control
+.env
+
+/generated/prisma
+
+# Scratch output from puduapi/test-pudu.ts — captured live data, never commit
+puduapi/raw-result.json
+puduapi/*-output.txt
+puduapi/result.txt

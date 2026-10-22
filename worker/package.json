@@ -1,0 +1,33 @@
+{
+  "name": "ozone360-erp-worker",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate:local": "wrangler d1 migrations apply ozone360-erp-dev --local",
+    "db:migrate:remote": "wrangler d1 migrations apply ozone360-erp-dev --remote",
+    "db:seed:pudu:gen": "node scripts/generate-pudu-catalog-sql.mjs",
+    "db:seed:gen": "tsx scripts/seed.ts",
+    "db:seed:local": "npm run db:seed:gen && wrangler d1 execute ozone360-erp-dev --local --file=./seed.sql",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx src/lib/used-parts.test.ts"
+  },
+  "dependencies": {
+    "bcryptjs": "^3.0.3",
+    "drizzle-orm": "^0.36.4",
+    "hono": "^4.13.5",
+    "jose": "^5.9.6",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20241224.0",
+    "@types/node": "^22.10.5",
+    "drizzle-kit": "^0.30.1",
+    "tsx": "^4.21.0",
+    "typescript": "~5.9.3",
+    "wrangler": "^4.0.0"
+  }
+}

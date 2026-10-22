@@ -1,0 +1,175 @@
+name: Deploy to Cloudflare
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
+
+env:
+  CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+jobs:
+  deploy-worker:
+    name: 🚀 Deploy Worker (backend)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # needed to diff against the previous push for the catalog check
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: worker/package-lock.json
+
+      - name: 📦 Install
+        working-directory: worker
+        run: npm ci
+
+      - name: 🔎 Typecheck
+        working-directory: worker
+        run: npm run typecheck
+
+      - name: 🗄️ Apply D1 migrations
+        working-directory: worker
+        run: npx wrangler d1 migrations apply ozone360-erp-dev --remote
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+
+      # Re-seeding upserts all ~1.4k catalog rows (+ cache-version trigger writes), which eats
+      # into D1's free daily write/read quota — so only do it when the catalog actually changed.
+      # Manual runs (workflow_dispatch) always seed, so a failed seed can be retried by hand.
+      - name: 🔍 Detect catalog changes
+        id: catalog
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" != "push" ] || [ -z "$BEFORE" ] || ! git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          elif git diff --quiet "$BEFORE" "$GITHUB_SHA" -- server/data/pudu-spare-catalog.json worker/scripts/generate-pudu-catalog-sql.mjs; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: 🌱 Seed PUDU spare parts catalog into D1
+        if: steps.catalog.outputs.changed == 'true'
+        working-directory: worker
+        run: |
+          npm run db:seed:pudu:gen
+          npx wrangler d1 execute ozone360-erp-dev --remote --file=./seed-pudu-catalog.sql
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+
+      # Pulls the same GitHub Secrets the old Docker deploy used to inject into .env,
+      # and pushes them into the Worker via `wrangler secret put` instead.
+      - name: 🔐 Sync secrets from GitHub
+        working-directory: worker
+        run: |
+          echo "${{ secrets.JWT_SECRET }}" | npx wrangler secret put JWT_SECRET
+          echo "${{ secrets.PUDUAPIKEY }}" | npx wrangler secret put PUDUAPIKEY
+          echo "${{ secrets.PUDUAPIsecret }}" | npx wrangler secret put PUDUAPIsecret
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+
+      - name: 🚀 Deploy
+        working-directory: worker
+        run: npx wrangler deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+
+  deploy-pages:
+    name: 🚀 Deploy Pages (frontend)
+    runs-on: ubuntu-latest
+    needs: deploy-worker
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: 📦 Install
+        run: npm ci
+
+      - name: 🏗️ Build
+        run: npm run build
+        env:
+          VITE_GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+
+      - name: 🚀 Deploy to Pages
+        run: npx wrangler pages deploy dist --project-name ozone360-erp --branch main
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+
+  notify:
+    name: 📣 Notify
+    runs-on: ubuntu-latest
+    needs: [deploy-worker, deploy-pages]
+    if: always()
+    steps:
+      - name: Discord notification
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          WORKER_STATUS: ${{ needs.deploy-worker.result }}
+          PAGES_STATUS: ${{ needs.deploy-pages.result }}
+        run: |
+          if [ -z "$DISCORD_WEBHOOK_URL" ]; then
+            echo "[WARN] DISCORD_WEBHOOK_URL not set - skipping"
+            exit 0
+          fi
+          if [ "$WORKER_STATUS" = "success" ] && [ "$PAGES_STATUS" = "success" ]; then
+            COLOR=3066993; TITLE="Deploy OK"; DESC="OZONE360 ERP (Cloudflare) updated successfully"
+          else
+            COLOR=15158332; TITLE="Deploy FAILED"; DESC="Error during deploy - check logs"
+          fi
+          SHORT_SHA=$(echo "$GITHUB_SHA" | cut -c1-7)
+          COMMIT_URL="https://github.com/$GITHUB_REPOSITORY/commit/$GITHUB_SHA"
+          RUN_URL="https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          DT=$(date -u +"%Y-%m-%d %H:%M UTC")
+          BODY=$(cat <<JSON
+          {
+            "embeds": [{
+              "title": "$TITLE",
+              "description": "$DESC",
+              "color": $COLOR,
+              "fields": [
+                {"name": "Commit", "value": "[\`$SHORT_SHA\`]($COMMIT_URL)", "inline": true},
+                {"name": "Branch", "value": "\`$GITHUB_REF_NAME\`", "inline": true},
+                {"name": "By", "value": "@$GITHUB_ACTOR", "inline": true},
+                {"name": "Time", "value": "$DT", "inline": true},
+                {"name": "Logs", "value": "[View run]($RUN_URL)", "inline": true}
+              ],
+              "footer": {"text": "OZONE360 ERP Production (Cloudflare)"}
+            }]
+          }
+          JSON
+          )
+          curl -s -X POST "$DISCORD_WEBHOOK_URL" -H "Content-Type: application/json" -d "$BODY" || echo "[WARN] Discord notification failed (non-fatal)"
+
+      - name: Write Job Summary
+        if: always()
+        env:
+          WORKER_STATUS: ${{ needs.deploy-worker.result }}
+          PAGES_STATUS: ${{ needs.deploy-pages.result }}
+        run: |
+          {
+            echo "## OZONE360 ERP - Deployment Summary (Cloudflare)"
+            echo ""
+            echo "| Field | Value |"
+            echo "|---|---|"
+            echo "| **Worker** | $WORKER_STATUS |"
+            echo "| **Pages** | $PAGES_STATUS |"
+            echo "| **Commit** | [\`${GITHUB_SHA:0:7}\`](https://github.com/$GITHUB_REPOSITORY/commit/$GITHUB_SHA) |"
+            echo "| **Branch** | \`$GITHUB_REF_NAME\` |"
+            echo "| **Triggered by** | @$GITHUB_ACTOR |"
+            echo "| **URL** | [erp.example.com](https://erp.example.com) |"
+          } >> "$GITHUB_STEP_SUMMARY"

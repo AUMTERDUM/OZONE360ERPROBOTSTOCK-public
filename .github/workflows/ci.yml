@@ -1,0 +1,63 @@
+name: ✅ CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  check:
+    name: 🔎 Lint, Build & Typecheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: 📦 Install (frontend)
+        run: npm ci
+
+      # ponytail: lint is informational — repo has a backlog of existing
+      # lint errors. Remove continue-on-error once that backlog is cleared.
+      - name: 🧹 Lint (non-blocking)
+        run: npm run lint
+        continue-on-error: true
+
+      - name: 🧪 Test (frontend)
+        run: npm test
+
+      - name: 🏗️ Build (runs tsc -b)
+        run: npm run build
+
+      - name: 📦 Install (worker)
+        working-directory: worker
+        run: npm ci
+
+      - name: 🔎 Typecheck (worker)
+        working-directory: worker
+        run: npm run typecheck
+
+      - name: 🧪 Test (worker)
+        working-directory: worker
+        run: npm test
+
+      # Catches wrangler.toml/binding breakage here instead of mid-deploy on main.
+      - name: 🧪 Worker build dry-run
+        working-directory: worker
+        run: npx wrangler deploy --dry-run --outdir /tmp/worker-dry-run
+
+      - name: 📦 Install (server)
+        working-directory: server
+        run: npm ci
+
+      - name: 🧬 Generate Prisma client
+        working-directory: server
+        run: npx prisma generate
+
+      - name: 🔎 Typecheck (server)
+        working-directory: server
+        run: npx tsc --noEmit

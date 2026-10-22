@@ -1,0 +1,21 @@
+# Development override — use with: docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+services:
+  server:
+    volumes:
+      - ./server:/app
+      - /app/node_modules
+    environment:
+      - DATABASE_URL=file:/app/dev.db
+    command: ["sh", "-c", "npx prisma generate && npx prisma db push --accept-data-loss && npm run dev"]
+
+  client:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    ports:
+      - "5173:5173"
+    volumes:
+      - .:/app
+      - /app/node_modules
+    environment:
+      - VITE_API_URL=/api

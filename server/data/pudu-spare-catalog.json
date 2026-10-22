@@ -1,0 +1,5 @@
+[
+  { "sku": "DEMO-0001", "name": "Demo Tray", "description": "Sample spare part (demo data)", "category": "DemoBot", "productModel": "DemoBot", "partType": "Accessory", "unitPrice": 100, "supplier": "Demo Supplier", "status": "active", "sourceFile": "demo.xlsx", "sourceSheet": "Demo" },
+  { "sku": "DEMO-0002", "name": "Demo Battery", "description": "Sample spare part (demo data)", "category": "DemoBot", "productModel": "DemoBot", "partType": "Battery", "unitPrice": 2500, "supplier": "Demo Supplier", "status": "active", "sourceFile": "demo.xlsx", "sourceSheet": "Demo" },
+  { "sku": "DEMO-0003", "name": "Demo Wheel", "description": "Sample spare part (demo data)", "category": "DemoBot", "productModel": "DemoBot", "partType": "Mechanical", "unitPrice": 800, "supplier": "Demo Supplier", "status": "active", "sourceFile": "demo.xlsx", "sourceSheet": "Demo" }
+]
